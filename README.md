@@ -1,133 +1,149 @@
-<p align="center">
-  <a href="https://mos.caldis.me/">
-    <img width="160" src="assets/readme/app-icon.png" alt="Mos app icon">
-  </a>
-</p>
+# Moss
 
-<h1 align="center">Mos</h1>
+Moss 是基于 [Mos](https://github.com/Caldis/Mos) 的个人分支。本文件只记录这个分支相对上游新增、重写的内容，不重复上游已有功能。
 
-<p align="center">
-  让 macOS 上的鼠标滚轮和触控板一样顺滑，同时保留鼠标该有的精准控制。
-</p>
+当前改动集中在新增的「窗口铺满下屏」能力，以及围绕它做的性能、稳定性和诊断工作。
 
-<p align="center">
-  <a href="https://github.com/Caldis/Mos/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Caldis/Mos?style=flat-square"></a>
-  <img alt="macOS 10.13+" src="https://img.shields.io/badge/macOS-10.13%2B-black?style=flat-square&logo=apple">
-  <img alt="Swift 5" src="https://img.shields.io/badge/Swift-5.0-orange?style=flat-square&logo=swift">
-  <a href="LICENSE"><img alt="License: CC BY-NC 4.0" src="https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey?style=flat-square"></a>
-</p>
+---
 
-<p align="center">
-  <a href="README.md">中文</a> ·
-  <a href="README.enUS.md">English</a> ·
-  <a href="README.de.md">Deutsch</a> ·
-  <a href="README.ja.md">日本語</a> ·
-  <a href="README.ko.md">한국어</a> ·
-  <a href="README.ru.md">Русский</a> ·
-  <a href="README.id.md">Bahasa Indonesia</a>
-</p>
+## 窗口铺满下屏
 
-<p align="center">
-  <a href="https://mos.caldis.me/">官网</a> ·
-  <a href="https://github.com/Caldis/Mos/releases">下载</a> ·
-  <a href="https://github.com/Caldis/Mos/wiki">Wiki</a> ·
-  <a href="https://github.com/Caldis/Mos/discussions">Discussions</a>
-</p>
+### 做了什么
 
-<p align="center">
-  <img src="assets/readme/zh-cn/application-settings.png" alt="Mos 按应用配置滚动" width="920">
-</p>
+- 偏好设置新增「程序坞」标签页，里面是一个「窗口铺满下屏」开关、热键录制按钮、「立即执行一次」按钮，以及辅助功能未授权时的提示与直达按钮。
+- 触发后，把当前最前面那个普通窗口的左右两边、顶边对齐屏幕，底边向下延伸到屏幕最底边（保留菜单栏高度，不再保留 Dock 占用的 67pt）。
+- 同一个窗口再次触发就恢复原来的 frame；如果中途换了应用或换了窗口，则视为对新窗口做一次铺满，不会恢复错窗口。
+- 全流程不激活、不前置目标应用：只通过 Accessibility 写 `AXPosition` / `AXSize`，触发前后前台应用保持不变。
 
-## 为什么是 Mos
+### 为什么必须让 Dock 让位
 
-普通滚轮在 macOS 上常常显得生硬, 这是由于滚轮的精度不足导致的。Mos 会接管鼠标滚轮事件，将滚动行为插值转换成更顺滑的滚动，同时保留每个应用、每个方向、每颗按键的控制权。
+窗口能长到多高由屏幕的可用区（`visibleFrame`）决定。Dock 常驻在底部时，可用区比屏幕少 67pt，AX 写入会被系统按可用区上限夹住——这不是窗口自身的最小/最大尺寸约束，而是 AX 严格遵守可用区。因此想让窗口贴到物理屏幕底边，只能让 Dock 暂时不占位：把 `com.apple.dock` 的 `autohide` 临时设为 `true`，等 Dock 收起后再动窗口，结束后写回原值。
 
-同时, 你还可以使用 Mos 对任意鼠标按键进行重新映射或改写, 以适配你的工作流。
+被夹住时的现象很具体：`{161,243,1290,795}` 的窗口请求 `{0,30,2016,1008}`，实际只得到 `1855×891`，看起来就是「没铺满」。
 
-Mos 是免费的开源菜单栏工具，支持 macOS 10.13 及以上版本。
+### Dock 让位时序
 
-## 功能亮点
+1. 先读 `com.apple.dock` 的 `autohide` 原值，写入本地 `pending` 标记（进程中途被杀时下次启动能补还原）。
+2. 用 `CFPreferencesSetAppValue` + `CFPreferencesAppSynchronize` 在进程内直接写 `autohide=true`（实测个位数毫秒；`defaults write` 子进程要 64–234ms）。
+3. `killall Dock`。这是硬前提：Dock 只有在重启后才会重新读取 `autohide` 并重排可用区。
+4. 以 25ms 间隔轮询 Dock 的 PID（`NSRunningApplication` 查询约 1ms），确认它真的重启完成，而不是只看 `killall` 的退出码。
+5. 以 25ms 间隔轮询目标屏的 `visibleFrame`，按「可用区是否真的变大」判断让位，而不是盲等固定时长。
+6. 结束后写回原值（原来没有这个键就删掉），再次 `killall Dock`，并按 PID + 回读值双重确认还原生效。
 
-- **平滑滚动**：自定义最短步长、速度增益和持续时间，也可以启用模拟触控板模式。
-- **轴向独立**：垂直/水平滚动可以分别设置平滑和反向。
-- **滚动功能键**：为加速、方向转换、禁用平滑滚动绑定任意自定义按键。
-- **按应用配置**：每个 App 可以继承全局设置，也可以单独覆盖滚动、快捷键和按钮绑定规则。
-- **按钮绑定**：录制鼠标、键盘或自定义事件，绑定到系统动作、快捷键、打开 App、运行脚本或打开文件。
-- **动作库**：内置调度中心、空间切换、截图、访达操作、文档编辑、鼠标滚动等常用动作。
-- **Logi/HID++ 支持**：支持 Bolt、Unifying 接收器和蓝牙直连设备上的 Logitech 按钮事件，并可处理 Logi 专有动作。
+只碰 `autohide` 一个键。`autohide-delay` / `tilesize` 不读不写——实测叠加 `autohide-delay > 0` 会改变 Dock 让位行为，导致铺满失效。
 
-## 截图
+### 先位置后尺寸
 
-| 滚动调节 | 按应用配置 |
-| --- | --- |
-| <img src="assets/readme/zh-cn/scrolling.png" alt="Mos 滚动设置" width="420"> | <img src="assets/readme/zh-cn/application-settings.png" alt="Mos 按应用配置设置" width="420"> |
+首帧写入和每帧写入的坐标顺序不同，这是有意为之：
 
-| 打开 App、脚本或文件 | 快捷动作菜单 |
-| --- | --- |
-| <img src="assets/readme/zh-cn/buttons-open.png" alt="Mos 打开动作" width="420"> | <img src="assets/readme/zh-cn/buttons-action.png" alt="Mos 快捷动作菜单" width="420"> |
+- **首帧（锚点帧）先写位置，再写尺寸。** 窗口从屏幕中间放大到整屏时，如果先写尺寸，系统会按当前左边/顶边到屏幕右/下边的剩余距离夹住新尺寸（即上面那次 `1855×891`）。先把左上角挪到目标位置，窗口才有完整空间可以长大。
+- **动画帧只写尺寸，不动位置。** 顶边、左边、宽度已经在锚点帧对齐，后面只需要把高度与底边往下推，避免每帧都写两个属性。
 
-## 下载与安装
+### 动画时序
 
-### 手动安装
+- 锚点帧：一次整帧写入，把左边/顶边/宽度对齐目标，高度先保持当前底边，作为动画起点。
+- 插值：以 60fps（16.67ms 间隔）逐帧写 `AXSize`，进度按真实经过时间计算，缓动用 smoothstep `t²(3-2t)`，总时长 0.24s。
+- 收尾：动画走完后以 120ms 间隔最多再整帧校正 3 次，兼容部分应用异步应用尺寸；只有确认写不进去才判失败。
+- 动画期间如果检测到窗口被用户拖动/缩放（位置或宽度偏移超过 3pt），立即中止，避免和用户抢窗口。
 
-从 [GitHub Releases](https://github.com/Caldis/Mos/releases) 下载最新版本，解压后将 `Mos.app` 放入 `/Applications`。
+### 热键与录制
 
-首次启动时，macOS 可能会要求你授予 Mos 辅助功能权限。Mos 需要这项权限读取和重写滚动事件；如果授权后仍无法工作，可以参考 [Wiki 中的权限排查](https://github.com/Caldis/Mos/wiki/%E5%A6%82%E6%9E%9C%E5%BA%94%E7%94%A8%E6%97%A0%E6%B3%95%E6%AD%A3%E5%B8%B8%E8%BF%90%E8%A1%8C)。
+- 用 Carbon `RegisterEventHotKey` 注册全局热键，不依赖辅助功能权限，只支持「修饰键 + 单个按键」。
+- 默认组合是 ⌃⌥⌘M；用户自定义过之后以用户值为准，清空则只保留面板上的「立即执行一次」路径。
+- 录制按钮点一下进入录制：按 Esc 取消，按 Delete 清空，必须带 ⌃/⌥/⌘ 之一，否则 beep 并继续等待。
+- 注册失败（通常是被别的应用占用）会在面板上显示红色提示，不会静默失效。
 
-### Homebrew
+### 失败分支与 Toast
 
-如果你习惯用 Homebrew 管理应用：
+所有失败都以 `失败分支=` 开头写日志，并且弹出可见 Toast（标题 + 简短技术原因），不再静默失败。可区分的分支包括：
+
+- 辅助功能未授权：直接把用户带到「系统设置 → 隐私与安全性 → 辅助功能」；
+- 没有目标应用 / 目标是系统 UI（Dock、控制中心、通知中心等）；
+- 没有可用窗口（对话框、浮层、已最小化、系统全屏、尺寸过小、桌面窗口、不可缩放）；
+- 窗口已关闭、窗口不在任何屏幕内；
+- Dock 未让出空间；
+- 窗口不可写、顶边/宽度无法对齐、尺寸被系统夹紧；
+- 动画期间被用户移动；
+- 看门狗超时。
+
+是否回滚窗口按分支区分：没动过窗口的分支不回滚；已经对齐或写到一半的分支会把原 frame 写回去。Dock 无论走哪条失败路径都会还原。
+
+### 3 秒看门狗与还原保障
+
+- 每次触发都启动 3 秒看门狗；超时无论处于哪个阶段，都强制还原 Dock，必要时回滚窗口。
+- Dock 还原按 PID 确认重启，单次等待 1.5s，失败最多重试 3 次；还原请求在途时不会重复 `killall`，避免触发系统节流。
+- 只有「PID 已变化 + 回读值一致」才清除 `pending` 标记；否则保留标记，下次启动或退出时补还原。
+- 应用启动时先检查 `pending`，发现上次有未完成的还原就先补执行；正常退出、关闭开关、操作被中止都会还原。
+
+### 已知限制与地板耗时
+
+- **地板耗时约 1.4s。** 从写入 `autohide` 到窗口可以铺满，实测约 1.41s：其中 killall → Dock 新进程约 0.35s，Dock 进程出现后还要约 1.05–1.08s 才会自己收起。这段是系统 Dock 的空闲收起延时，与写入方式、`autohide-time-modifier` 都无关，应用层无法消除。
+- 用户本来就把 Dock 设为自动隐藏、且触发时已经收起时，走快速路径：完全不碰 Dock，实测总耗时约 0.36s。
+- 不处理系统全屏窗口、对话框/浮层、已最小化窗口、不可缩放窗口，以及没有常规窗口的系统 UI 进程。
+- 有最大高度约束的窗口会被系统夹住，此时以 Toast 报「尺寸被限制」，不会假装成功。
+- 依赖辅助功能权限；签名变化（例如重新 ad-hoc 签名）后 macOS 会按 cdhash 重新校验，需要在系统设置里重新授权。
+
+---
+
+## 性能实测与优化
+
+面板和日志之外，这个分支把一次触发的耗时拆成了可量化阶段，并在实测后做了针对性优化。
+
+实测环境：2016×1134 屏幕，Dock 常驻（占位 67pt），菜单栏 30pt，铺满目标 `{0,30,2016,1104}`。
+
+| 路径 | 总耗时 | 关键分段 |
+| --- | --- | --- |
+| 旧实现，Dock 常驻 | 约 2216ms | 写 autohide 234ms、killall→Dock 238ms、让位 1832ms、动画 383ms |
+| 当前实现，Dock 常驻 | 约 1707ms | Dock 请求 0ms、killall→Dock 就绪 353ms、让位 1414ms、首帧 9ms、动画 254ms（13 帧，每帧 AX 平均 3.52ms / 最大 5.33ms） |
+| 当前实现，Dock 已自动隐藏 | 约 360ms | 不碰 Dock，首帧 7ms、动画 256ms |
+
+结论：Dock 让位占总耗时约 83%，其中约 1.05s 是上面说的系统延时，属于地板；AX 每帧写入远小于一帧预算，不是瓶颈。
+
+据此做的优化：
+
+- Dock 已让位时走快速路径，跳过所有 Dock 操作与还原。
+- 写 Dock 从 `defaults` 子进程改为进程内 CFPreferences，读值前先 `CFPreferencesAppSynchronize`，避免读到过期缓存。
+- Dock PID 查询从 `pgrep` 子进程改为 `NSRunningApplication`，`killall` 改为异步子进程，按 PID 变化判定结果，不再阻塞等待。
+- 让位检测间隔从 50ms 收紧到 25ms；只有超出 2s 观察窗口且没有重启在途时，才重新催一次 Dock 重启（最多 2 次），避免反复打断 Dock 自己收起。
+- 动画从 0.35s / 约 30fps 改为 0.24s / 60fps，并把每帧写入从「位置+尺寸」减为「只写尺寸」。
+
+---
+
+## 阶段耗时诊断日志
+
+- 同时写统一日志（`NSLog`，可过滤 `MosDockDiag`）和 `/tmp/mosfill.log`，便于直接把日志贴出来定位问题。
+- 日志带毫秒时间戳（`MM-dd HH:mm:ss.SSS`），文件超过 1MB 下次写入时清空。
+- 每次铺满结束输出一行可复制的阶段报告：选窗、写 Dock、Dock 请求、killall→Dock 就绪、让位等待、首帧写入、动画时长与帧数、每帧 AX 平均/最大值、最后一帧、总耗时。
+- 选窗被拒的每个候选都会写明原因（角色不是 AXWindow、对话框、已最小化、系统全屏、尺寸过小、桌面窗口、不在任何屏幕内、属性不可写等）。
+
+---
+
+## 偏好设置「程序坞」面板
+
+- 在「滚动」标签右侧插入独立的「程序坞」标签，视图代码用 Auto Layout 构建，不依赖 storyboard 改动。
+- 面板包含：分组标题、功能开关、功能说明、热键录制按钮、「立即执行一次」按钮。
+- 打开开关即注册热键并监听设置变化；关闭开关会注销热键，并在当前操作结束后恢复已铺满的窗口。
+- 从系统设置授权返回时（应用重新激活）会刷新权限提示与热键状态。
+
+---
+
+## 改名为 Moss
+
+- 产物、`CFBundleName`、`CFBundleDisplayName`、菜单栏与偏好窗口里的品牌文字统一为 Moss。
+- 本地化文案（`Localizable.xcstrings`）与 storyboard 里的显示文案中出现的 Mos 一并替换，内部 key `categoryMosMouseScroll` 保持不变。
+- **bundle id 保持 `com.caldis.Mos.debug` / `com.caldis.Mos` 不变**：辅助功能授权按 bundle id + 签名校验，改名同时改 id 会让刚授予的权限立即失效。
+- Swift 模块名通过 `PRODUCT_MODULE_NAME = Mos` 固定，storyboard 里的 `customModule="Mos"` 与测试的 `@testable import Mos` 都不受影响。
+
+---
+
+## 构建与运行
+
+要求 macOS 12.0+（工程 deployment target 由构建参数覆盖为 12.0），Xcode 15+。
 
 ```bash
-brew install --cask mos
+xcodebuild -project Mos.xcodeproj -scheme Debug -configuration Debug \
+  -destination 'platform=macOS' MACOSX_DEPLOYMENT_TARGET=12.0 \
+  CODE_SIGNING_ALLOWED=NO build
 ```
 
-更新：
-
-```bash
-brew update
-brew upgrade --cask mos
-```
-
-## 贡献
-
-Mos 是一个会处理系统输入、辅助功能权限、Logi/HID 设备和用户持久化配置的小工具。维护成本和回归风险都很真实，所以我们更欢迎小而集中的改动。
-
-涉及 Logi/HID、辅助功能权限、签名、notarization、更新机制或真实设备测试的改动风险较高，请先在 issue 或 Discussions 中说明背景。
-
-PR 描述中请说明变更动机、测试方式和可能影响的行为。
-
-> 由 AI 开发的代码已经成为主流，我们理解现在大量的 PR 都经由 AI 生成 (包括我自己)。但提交者仍需要自行理解、整理并验证每一行代码的实际作用, 因为每个 PR 审查都有成本。
-
-### 非常欢迎
-
-- 小范围 bug 修复，并提供复现路径或验证说明。
-- UI/UX 细节修补，例如布局、文案、可读性和引导流程的小改进。
-- 小范围安全加固，例如更稳妥的权限状态处理、输入保护和边界检查。
-- 本地化、文档和测试补充。
-- 单一主题、变更行数较小、容易 review 的 PR。
-
-### 暂不合并
-
-- 未经讨论的大型新功能、模块或架构改造。
-- 大量 AI 生成的代码重写、格式化、迁移或“顺手优化”。
-- 会改变输入事件处理、权限提示、更新检查、旧用户数据读取或持久化格式的行为。
-- 一次性补全大量机器翻译，尤其是无法由母语使用者校对的翻译集。
-
-我们欢迎任何形式的贡献，有任何建议或意见您可以给我们 [提问](https://github.com/Caldis/Mos/issues)。
-
-如果你对新增功能非常有热情，欢迎先在 [Discussions](https://github.com/Caldis/Mos/discussions) 发起讨论。
-
-## 鸣谢
-
-- [Charts](https://github.com/danielgindi/Charts)
-- [LoginServiceKit](https://github.com/Clipy/LoginServiceKit)
-- [Sparkle](https://github.com/sparkle-project/Sparkle)
-- [Smoothscroll-for-websites](https://github.com/galambalazs/smoothscroll-for-websites)
-- [Solaar](https://github.com/pwr-Solaar/Solaar)
-
-## License
-
-Copyright (c) 2017-2026 Caldis. All rights reserved.
-
-Mos 使用 [CC BY-NC 4.0](http://creativecommons.org/licenses/by-nc/4.0/) 授权。请不要将 Mos 上传到 App Store。
+本分支的调试产物为 `Moss.app`，bundle id 仍是 `com.caldis.Mos.debug`。首次运行需要在「系统设置 → 隐私与安全性 → 辅助功能」中授权；重新签名后需要重新授权一次。

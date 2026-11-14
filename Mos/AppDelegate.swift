@@ -128,6 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ShortcutExecutor.shared.modifierFlagsProvider = InputProcessor.shared
         LogiUsageBootstrap.installOptionsObservers()
         LogiUsageBootstrap.refreshAll()
+        FillScreenBelowController.shared.start()
         startWithAccessibilityPermissionsChecker(nil)
         UpdateManager.shared.scheduleCheckOnAppStartIfNeeded()
     }
@@ -145,10 +146,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // 关闭前停止滚动处理
     func applicationWillTerminate(_ aNotification: Notification) {
+        NSLog("MosDockDiag: applicationWillTerminate sideEffects=\(AppRuntime.shouldRunAppStartupSideEffects)")
         guard AppRuntime.shouldRunAppStartupSideEffects else { return }
         LogiCenter.shared.stop()
         ScrollCore.shared.disable()
         ButtonCore.shared.disable()
+        // 退出时还原系统 Dock 设置并重启 Dock
+        FillScreenBelowController.shared.stop()
         // 写入尚未 flush 的脏配置组
         Options.shared.flushPendingSaves()
     }
@@ -165,6 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 ScrollCore.shared.enable()
                 ButtonCore.shared.enable()
                 LogiCenter.shared.start()
+                FillScreenBelowController.shared.start()
             }
         } else {
             if Utils.isHadAccessibilityPermissions() {
@@ -172,6 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 ScrollCore.shared.enable()
                 ButtonCore.shared.enable()
                 LogiCenter.shared.start()
+                FillScreenBelowController.shared.start()
             } else {
                 // 如果应用不在辅助权限列表内, 则弹出欢迎窗口
                 WindowManager.shared.showWindow(withIdentifier: WINDOW_IDENTIFIER.introductionWindowController, withTitle: "")
@@ -209,7 +215,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ScrollCore.shared.disable()
         ButtonCore.shared.disable()
         Toast.show(
-            NSLocalizedString("Accessibility permission lost, Mos has been paused", comment: ""),
+            NSLocalizedString("Accessibility permission lost, Moss has been paused", comment: ""),
             style: .warning,
             duration: 5.0
         )

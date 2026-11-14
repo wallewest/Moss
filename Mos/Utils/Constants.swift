@@ -117,6 +117,26 @@ class OPTIONS_UPDATE_DEFAULT {
     }
 }
 
+// 程序坞
+class OPTIONS_DOCK_DEFAULT {
+    // 窗口铺满下屏: 触发一次, 把最前台窗口的底边补到屏幕最底边
+    var fillScreenBelow = false {
+        didSet { Options.shared.markChanged(.dock) }
+    }
+    // 全局热键: 键码 -1 表示未设置/已清空
+    var fillScreenHotKeyCode = -1 {
+        didSet { Options.shared.markChanged(.dock) }
+    }
+    // 全局热键: Carbon 修饰符
+    var fillScreenHotKeyModifiers: UInt = 0 {
+        didSet { Options.shared.markChanged(.dock) }
+    }
+    // 用户是否自定义过热键 (未自定义时用默认组合)
+    var fillScreenHotKeyCustomized = false {
+        didSet { Options.shared.markChanged(.dock) }
+    }
+}
+
 // 按键
 class OPTIONS_BUTTONS_DEFAULT: Codable {
     var binding:[ButtonBinding] = [] {

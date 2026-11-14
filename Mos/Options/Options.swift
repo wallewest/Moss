@@ -46,11 +46,18 @@ struct OptionItem {
         static let Allowlist = "allowlist"
         static let Applications = "applications"
     }
+
+    struct Dock {
+        static let FillScreenBelow = "dockFillScreenBelow"
+        static let FillScreenHotKeyCode = "dockFillScreenHotKeyCode"
+        static let FillScreenHotKeyModifiers = "dockFillScreenHotKeyModifiers"
+        static let FillScreenHotKeyCustomized = "dockFillScreenHotKeyCustomized"
+    }
 }
 
 /// 配置分组: 变更通知与脏组写入的粒度
 enum OptionsGroup: CaseIterable {
-    case general, update, scroll, buttons, application
+    case general, update, scroll, buttons, application, dock
 }
 
 class Options {
@@ -84,6 +91,10 @@ class Options {
     // 应用
     var application = OPTIONS_APPLICATION_DEFAULT() {
         didSet { markChanged(.application) }
+    }
+    // 程序坞
+    var dock = OPTIONS_DOCK_DEFAULT() {
+        didSet { markChanged(.dock) }
     }
 
     /// 保留无法 decode 的 binding 原始 JSON 元素 (来自未来 Mos 版本).
@@ -231,6 +242,16 @@ extension Options {
         // 应用
         application.allowlist = UserDefaults.standard.bool(forKey: OptionItem.Application.Allowlist)
         application.applications = loadApplicationsData()
+        // 程序坞
+        dock.fillScreenBelow = UserDefaults.standard.bool(forKey: OptionItem.Dock.FillScreenBelow)
+        dock.fillScreenHotKeyCustomized = UserDefaults.standard.bool(forKey: OptionItem.Dock.FillScreenHotKeyCustomized)
+        // 键码缺失时保持 -1 (未设置), 不能落到 0 键
+        dock.fillScreenHotKeyCode = UserDefaults.standard.object(forKey: OptionItem.Dock.FillScreenHotKeyCode)
+            .flatMap { $0 as? Int } ?? -1
+        dock.fillScreenHotKeyModifiers = UInt(
+            UserDefaults.standard.object(forKey: OptionItem.Dock.FillScreenHotKeyModifiers)
+                .flatMap { $0 as? Int } ?? 0
+        )
         // 解锁
         readingOptionsLock = false
     }
@@ -278,6 +299,17 @@ extension Options {
             } else {
                 NSLog("Failed to serialize applications data, skipping save")
             }
+        case .dock:
+            UserDefaults.standard.set(dock.fillScreenBelow, forKey: OptionItem.Dock.FillScreenBelow)
+            UserDefaults.standard.set(dock.fillScreenHotKeyCode, forKey: OptionItem.Dock.FillScreenHotKeyCode)
+            UserDefaults.standard.set(
+                Int(dock.fillScreenHotKeyModifiers),
+                forKey: OptionItem.Dock.FillScreenHotKeyModifiers
+            )
+            UserDefaults.standard.set(
+                dock.fillScreenHotKeyCustomized,
+                forKey: OptionItem.Dock.FillScreenHotKeyCustomized
+            )
         }
     }
 

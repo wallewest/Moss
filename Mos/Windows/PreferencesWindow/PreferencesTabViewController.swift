@@ -28,6 +28,25 @@ class PreferencesTabViewController: NSTabViewController {
     
     let backgroundVisualEffectView = NSVisualEffectView()
     
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupDockTab()
+    }
+    
+    // 在「滚动」右侧插入「程序坞」标签
+    private func setupDockTab() {
+        guard !tabViewItems.contains(where: { ($0.identifier as? String) == "dock" }) else {
+            return
+        }
+        let dockTabViewItem = NSTabViewItem(identifier: "dock")
+        dockTabViewItem.label = NSLocalizedString("Dock", comment: "")
+        dockTabViewItem.image = NSImage(named: "DockTabIcon")
+        let dockViewController = PreferencesDockViewController()
+        dockTabViewItem.viewController = dockViewController
+        let scrollingIndex = tabViewItems.firstIndex(where: { ($0.identifier as? String) == "scrolling" })
+        insertTabViewItem(dockTabViewItem, at: (scrollingIndex ?? tabViewItems.count - 1) + 1)
+    }
+    
     override func viewDidAppear() {
         // 移除已有约束
         view.removeConstraints(view.constraints)
